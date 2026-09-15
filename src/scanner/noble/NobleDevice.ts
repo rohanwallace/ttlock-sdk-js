@@ -93,6 +93,165 @@ export class NobleDevice extends EventEmitter implements DeviceInterface {
   }
 
   async connect(timeout: number = 10): Promise<boolean> {
+  console.log("==================================================");
+  console.log(`[NOBLE] connect() called for ${this.address}`);
+  console.log(`[NOBLE] id=${this.id}`);
+  console.log(`[NOBLE] address=${this.address}`);
+  console.log(`[NOBLE] addressType=${this.addressType}`);
+  console.log(`[NOBLE] RSSI=${this.rssi}`);
+  console.log(`[NOBLE] connectable=${this.connectable}`);
+  console.log(`[NOBLE] wrapper.connected=${this.connected}`);
+  console.log(`[NOBLE] wrapper.connecting=${this.connecting}`);
+  console.log(`[NOBLE] peripheral.state=${this.peripheral.state}`);
+  console.log(`[NOBLE] timeout=${timeout}s`);
+
+  if (!this.connectable || this.connected || this.connecting) {
+    console.error(
+      `[NOBLE] Refusing connection: ` +
+      `connectable=${this.connectable}, ` +
+      `connected=${this.connected}, ` +
+      `connecting=${this.connecting}, ` +
+      `peripheral.state=${this.peripheral.state}`
+    );
+    console.log("==================================================");
+    return false;
+  }
+
+  if (this.peripheral.state == "connected") {
+    console.log(
+      "[NOBLE] Peripheral already reports connected; synchronising wrapper state"
+    );
+
+    this.connected = true;
+
+    console.log("==================================================");
+    return true;
+  }
+
+  this.connecting = true;
+
+  console.log(`[NOBLE] Starting peripheral.connect() for ${this.address}`);
+
+  const startTime = Date.now();
+
+  const connected = await new Promise<boolean>((resolve) => {
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+
+      console.error(
+        `[NOBLE] Connect TIMEOUT after ${Date.now() - startTime} ms`
+      );
+
+      console.error(
+        `[NOBLE] Peripheral state at timeout: ${this.peripheral.state}`
+      );
+
+      try {
+        console.log("[NOBLE] Calling peripheral.cancelConnect()");
+        this.peripheral.cancelConnect();
+      } catch (error) {
+        console.error("[NOBLE] cancelConnect() threw:", error);
+      }
+
+      resolve(false);
+
+    }, timeout * 1000);
+
+    this.peripheral.connect((error) => {
+      const elapsed = Date.now() - startTime;
+
+      console.log(
+        `[NOBLE] peripheral.connect() callback after ${elapsed} ms`
+      );
+
+      console.log(
+        `[NOBLE] peripheral.state in callback=${this.peripheral.state}`
+      );
+
+      if (settled) {
+        console.warn(
+          "[NOBLE] Connect callback arrived AFTER promise was already settled"
+        );
+
+        if (error !== undefined && error !== null) {
+          console.warn("[NOBLE] Late callback error:", error);
+        }
+
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timer);
+
+      if (error !== undefined && error !== null) {
+        console.error("[NOBLE] Peripheral connect error:", error);
+
+        if (error instanceof Error) {
+          console.error(`[NOBLE] Error name=${error.name}`);
+          console.error(`[NOBLE] Error message=${error.message}`);
+
+          if (error.stack) {
+            console.error(`[NOBLE] Stack:\n${error.stack}`);
+          }
+        }
+
+        resolve(false);
+
+      } else {
+        console.log("[NOBLE] Connect callback contained no error");
+
+        const stateConnected =
+          this.peripheral.state == "connected";
+
+        console.log(
+          `[NOBLE] stateConnected=${stateConnected}`
+        );
+
+        resolve(stateConnected);
+      }
+    });
+  });
+
+  console.log(
+    `[NOBLE] Connection promise resolved: ${connected}`
+  );
+
+  console.log(
+    `[NOBLE] peripheral.state after promise=${this.peripheral.state}`
+  );
+
+  if (!connected) {
+    console.error(`[NOBLE] Connection FAILED for ${this.address}`);
+
+    this.connecting = false;
+
+    console.log("==================================================");
+
+    return false;
+  }
+
+  this.connected = true;
+  this.connecting = false;
+
+  console.log(`[NOBLE] Connection SUCCESS for ${this.address}`);
+  console.log(`[NOBLE] negotiated/current MTU=${this.mtu}`);
+
+  console.log("[NOBLE] Emitting connected event");
+
+  this.emit("connected");
+
+  console.log("==================================================");
+
+  return true;
+}
+
+  async connect_OLD(timeout: number = 10): Promise<boolean> {
     if (!this.connectable || this.connected || this.connecting) {
       log("Peripheral state:", this.peripheral.state);
       return false;
@@ -270,11 +429,11 @@ export class NobleDevice extends EventEmitter implements DeviceInterface {
     }
   }
 
-  onConnect(error: string) {
+  onConnect_OLD(error: string) {
     log("Peripheral connect triggered");
   }
 
-  onDisconnect(error: string) {
+  onDisconnect_OLD(error: string) {
     this.connected = false;
     this.connecting = false;
     this.resetBusy();
@@ -290,6 +449,50 @@ export class NobleDevice extends EventEmitter implements DeviceInterface {
     });
     return text;
   }
+
+  onConnect(error: string) {
+  console.log(
+    `[NOBLE EVENT] peripheral emitted CONNECT for ${this.address}`
+  );
+
+  console.log(
+    `[NOBLE EVENT] state=${this.peripheral.state}, ` +
+    `wrapper.connected=${this.connected}, ` +
+    `wrapper.connecting=${this.connecting}`
+  );
+
+  if (error) {
+    console.warn(`[NOBLE EVENT] connect event error=${error}`);
+  }
+}
+
+onDisconnect(error: string) {
+  console.warn(
+    `[NOBLE EVENT] peripheral emitted DISCONNECT for ${this.address}`
+  );
+
+  console.warn(
+    `[NOBLE EVENT] state=${this.peripheral.state}, ` +
+    `wrapper.connected=${this.connected}, ` +
+    `wrapper.connecting=${this.connecting}`
+  );
+
+  if (error) {
+    console.warn(`[NOBLE EVENT] disconnect error=${error}`);
+  }
+
+  this.connected = false;
+  this.connecting = false;
+
+  this.resetBusy();
+
+  this.services.forEach((service) => service.dispose());
+  this.services = new Map();
+
+  console.log("[NOBLE EVENT] Emitting SDK disconnected event");
+
+  this.emit("disconnected");
+}
 
   toJSON(asObject: boolean = false): string | Object {
     let json: Record<string, any> = {
