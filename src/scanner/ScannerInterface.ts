@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { DeviceInterface } from './DeviceInterface';
 
-export type ScannerType = 'noble' | 'noble-websocket';
+export type ScannerType = 'noble' | 'noble-websocket' | 'bluez';
 
 export type ScannerOptions = {
   websocketHost?: string;
@@ -11,6 +11,11 @@ export type ScannerOptions = {
   websocketAesKey?: string;
   websocketUsername?: string;
   websocketPassword?: string;
+  /*
+   * Optional BlueZ adapter name, e.g. hci0.
+   * Omit to use BlueZ's default adapter.
+   */
+  bluezAdapter?: string;
 };
 
 export type ScannerStateType = 'unknown' | 'starting' | 'scanning' | 'stopping' | 'stopped';
