@@ -205,7 +205,7 @@ export class BluezDevice
       return Buffer.from([]);
     }
 
-    let best = Buffer.from([]);
+    let best: Buffer = Buffer.from([]);
 
     for (const [key, value] of Object.entries(raw)) {
       let payload: Buffer;
