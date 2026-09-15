@@ -296,151 +296,118 @@ export class BluezDevice
   }
 
   async connect(
-    timeout: number = CONNECT_TIMEOUT_MS / 1000,
-  ): Promise<boolean> {
-    console.log("==================================================");
-    console.log(
-      `[BLUEZ] connect() called for ${this.address}`,
+  timeout: number = CONNECT_TIMEOUT_MS / 1000,
+): Promise<boolean> {
+  console.log("==================================================");
+  console.log(
+    `[BLUEZ] connect() called for ${this.address}`,
+  );
+  console.log(`[BLUEZ] id=${this.id}`);
+  console.log(
+    `[BLUEZ] addressType=${this.addressType}`,
+  );
+  console.log(`[BLUEZ] RSSI=${this.rssi}`);
+  console.log(
+    `[BLUEZ] wrapper.connected=${this.connected}`,
+  );
+  console.log(
+    `[BLUEZ] wrapper.connecting=${this.connecting}`,
+  );
+
+  if (!this.connectable || this.connecting) {
+    console.error(
+      `[BLUEZ] Refusing connection: ` +
+      `connectable=${this.connectable}, ` +
+      `connecting=${this.connecting}`,
     );
-    console.log(`[BLUEZ] id=${this.id}`);
+
     console.log(
-      `[BLUEZ] addressType=${this.addressType}`,
-    );
-    console.log(`[BLUEZ] RSSI=${this.rssi}`);
-    console.log(
-      `[BLUEZ] wrapper.connected=${this.connected}`,
-    );
-    console.log(
-      `[BLUEZ] wrapper.connecting=${this.connecting}`,
+      "==================================================",
     );
 
-    if (
-      !this.connectable ||
-      this.connecting
-    ) {
-      console.error(
-        `[BLUEZ] Refusing connection: ` +
-        `connectable=${this.connectable}, ` +
-        `connecting=${this.connecting}`,
-      );
+    return false;
+  }
 
+  /*
+   * First ask BlueZ whether the device is already connected.
+   */
+  try {
+    const rawConnected =
+      await this.device.isConnected();
+
+    const alreadyConnected =
+      rawConnected === true ||
+      String(rawConnected).toLowerCase() === "true";
+
+    console.log(
+      `[BLUEZ] Connected before Connect()=${alreadyConnected}`,
+    );
+
+    if (alreadyConnected) {
       console.log(
-        "==================================================",
+        "[BLUEZ] Device already connected",
       );
-
-      return false;
-    }
-
-    try {
-      const rawConnected =
-        await this.device.isConnected();
-
-      const alreadyConnected =
-        rawConnected === (true as unknown) ||
-        String(rawConnected).toLowerCase() === "true";
-
-      if (alreadyConnected) {
-        console.log(
-          "[BLUEZ] Device already connected",
-        );
-
-        this.markConnected();
-
-        console.log(
-          "==================================================",
-        );
-
-        return true;
-      }
-    } catch {
-      /*
-       * Proceed with Connect if querying the current state fails.
-       */
-    }
-
-    this.connecting = true;
-
-    const start = Date.now();
-
-    try {
-      console.log(
-        `[BLUEZ] Calling org.bluez.Device1.Connect for ${this.address}`,
-      );
-
-      await this.withTimeout(
-        this.device.connect(),
-        timeout * 1000,
-        `connect ${this.address}`,
-      );
-
-      /*
-       * Device.Connect normally returns once BlueZ has established the link,
-       * but verify the property instead of assuming success.
-       */
-      const rawConnected =
-        await this.device.isConnected();
-
-      const isConnected =
-        rawConnected === (true as unknown) ||
-        String(rawConnected).toLowerCase() === "true";
-
-      console.log(
-        `[BLUEZ] Connect returned after ${Date.now() - start} ms`,
-      );
-
-      console.log(
-        `[BLUEZ] BlueZ Connected=${isConnected}`,
-      );
-
-      if (!isConnected) {
-        this.connecting = false;
-
-        console.error(
-          `[BLUEZ] Connection FAILED for ${this.address}`,
-        );
-
-        console.log(
-          "==================================================",
-        );
-
-        return false;
-      }
 
       this.markConnected();
-
-      console.log(
-        `[BLUEZ] Connection SUCCESS for ${this.address}`,
-      );
-
-      console.log(
-        `[BLUEZ] ATT MTU exposed to SDK=${this.mtu}`,
-      );
 
       console.log(
         "==================================================",
       );
 
       return true;
+    }
+  } catch (error) {
+    console.warn(
+      "[BLUEZ] Unable to query initial Connected state:",
+      error,
+    );
+  }
 
-    } catch (error) {
-      this.connecting = false;
+  this.connecting = true;
 
+  const start = Date.now();
+
+  try {
+    console.log(
+      `[BLUEZ] Calling org.bluez.Device1.Connect for ${this.address}`,
+    );
+
+    /*
+     * IMPORTANT:
+     *
+     * Do NOT wrap this in Promise.race()/withTimeout().
+     *
+     * Promise.race does not cancel the underlying D-Bus Connect request.
+     * That leaves a live BlueZ connection attempt behind while the SDK
+     * starts another retry, creating overlapping Connect/Disconnect calls.
+     *
+     * BlueZ already owns the LE connection timeout.
+     */
+    await this.device.connect();
+
+    console.log(
+      `[BLUEZ] Device1.Connect returned normally after ` +
+      `${Date.now() - start} ms`,
+    );
+
+    const rawConnected =
+      await this.device.isConnected();
+
+    const isConnected =
+      rawConnected === true ||
+      String(rawConnected).toLowerCase() === "true";
+
+    console.log(
+      `[BLUEZ] Connected after normal Connect()=${isConnected}`,
+    );
+
+    if (!isConnected) {
       console.error(
-        `[BLUEZ] Connection failed for ${this.address}:`,
-        error,
+        `[BLUEZ] Connect returned normally but device is not connected`,
       );
 
-      /*
-       * A timed-out D-Bus Connect cannot be cancelled through node-ble.
-       * Asking BlueZ to disconnect is the cleanest recovery available.
-       */
-      try {
-        await this.device.disconnect();
-      } catch {
-        // Ignore cleanup failure.
-      }
-
-      this.markDisconnected();
+      this.connecting = false;
+      this.connected = false;
 
       console.log(
         "==================================================",
@@ -448,7 +415,135 @@ export class BluezDevice
 
       return false;
     }
+
+    this.markConnected();
+
+    console.log(
+      `[BLUEZ] Connection SUCCESS for ${this.address}`,
+    );
+
+    console.log(
+      `[BLUEZ] ATT MTU exposed to SDK=${this.mtu}`,
+    );
+
+    console.log(
+      "==================================================",
+    );
+
+    return true;
+
+  } catch (error) {
+    const elapsed = Date.now() - start;
+
+    console.warn(
+      `[BLUEZ] Device1.Connect threw after ${elapsed} ms:`,
+      error,
+    );
+
+    /*
+     * This is important.
+     *
+     * BlueZ may have already changed Device1.Connected to true before
+     * the Connect method returns an error. node-ble reports that through
+     * its "connect" event, which we have observed in practice.
+     *
+     * Therefore a thrown Connect() call does NOT automatically mean that
+     * there is no usable BLE connection.
+     */
+
+    let actuallyConnected = this.connected;
+
+    console.log(
+      `[BLUEZ] wrapper.connected after Connect error=${this.connected}`,
+    );
+
+    try {
+      /*
+       * Give BlueZ's PropertiesChanged event a moment to settle before
+       * querying the authoritative Device1.Connected property.
+       */
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, 250),
+      );
+
+      const rawConnected =
+        await this.device.isConnected();
+
+      actuallyConnected =
+        rawConnected === true ||
+        String(rawConnected).toLowerCase() === "true";
+
+      console.log(
+        `[BLUEZ] Device1.Connected after Connect error=` +
+        `${actuallyConnected}`,
+      );
+
+    } catch (stateError) {
+      console.warn(
+        "[BLUEZ] Unable to query Connected after Connect error:",
+        stateError,
+      );
+
+      /*
+       * Fall back to the PropertiesChanged event state.
+       */
+      actuallyConnected = this.connected;
+
+      console.log(
+        `[BLUEZ] Falling back to event state: ` +
+        `connected=${actuallyConnected}`,
+      );
+    }
+
+    if (actuallyConnected) {
+      /*
+       * BlueZ reported an error from Connect(), but the actual Device1
+       * state says the BLE link exists.
+       *
+       * Do NOT disconnect it. Let the upper layer proceed to GATT
+       * discovery; that is the definitive test of whether the connection
+       * is usable.
+       */
+      console.warn(
+        `[BLUEZ] Connect returned an error, but Device1 is CONNECTED.`,
+      );
+
+      console.warn(
+        `[BLUEZ] Treating connection as successful and proceeding to GATT.`,
+      );
+
+      this.markConnected();
+
+      console.log(
+        "==================================================",
+      );
+
+      return true;
+    }
+
+    /*
+     * The connection genuinely failed.
+     *
+     * Do NOT call device.disconnect() here. There is no established
+     * connection to tear down, and calling Disconnect after a failed
+     * Connect can race BlueZ's own cleanup and invalidate the Device1
+     * proxy used by the next retry.
+     */
+    this.connected = false;
+    this.connecting = false;
+    this.resetBusy();
+
+    console.error(
+      `[BLUEZ] Connection genuinely failed for ${this.address}`,
+    );
+
+    console.log(
+      "==================================================",
+    );
+
+    return false;
   }
+}
 
   async disconnect(): Promise<boolean> {
     try {
@@ -636,8 +731,9 @@ export class BluezDevice
   private onBluezConnect(
     state: NodeBle.ConnectionState,
   ): void {
-    console.log(
-      `[BLUEZ EVENT] ${this.address} connected=${state.connected}`,
+    console.warn(
+      `[BLUEZ EVENT ${new Date().toISOString()}] ` +
+      `${this.address} connected=${state.connected}`,
     );
 
     if (state.connected) {
