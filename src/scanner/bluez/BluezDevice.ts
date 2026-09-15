@@ -332,12 +332,9 @@ export class BluezDevice
    * First ask BlueZ whether the device is already connected.
    */
   try {
-    const rawConnected =
-      await this.device.isConnected();
+    const rawConnected = await this.device.isConnected();
 
-    const alreadyConnected =
-      rawConnected === true ||
-      String(rawConnected).toLowerCase() === "true";
+    const alreadyConnected = BluezDevice.bluezBoolean(rawConnected);
 
     console.log(
       `[BLUEZ] Connected before Connect()=${alreadyConnected}`,
@@ -390,12 +387,9 @@ export class BluezDevice
       `${Date.now() - start} ms`,
     );
 
-    const rawConnected =
-      await this.device.isConnected();
+    const rawConnected = await this.device.isConnected();
 
-    const isConnected =
-      rawConnected === true ||
-      String(rawConnected).toLowerCase() === "true";
+    const isConnected = BluezDevice.bluezBoolean(rawConnected);
 
     console.log(
       `[BLUEZ] Connected after normal Connect()=${isConnected}`,
@@ -466,12 +460,9 @@ export class BluezDevice
         setTimeout(resolve, 250),
       );
 
-      const rawConnected =
-        await this.device.isConnected();
+      const rawConnected = await this.device.isConnected();
 
-      actuallyConnected =
-        rawConnected === true ||
-        String(rawConnected).toLowerCase() === "true";
+      const actuallyConnected = BluezDevice.bluezBoolean(rawConnected);
 
       console.log(
         `[BLUEZ] Device1.Connected after Connect error=` +
@@ -757,6 +748,10 @@ export class BluezDevice
     this.services = new Map();
 
     this.markDisconnected();
+  }
+
+  private static bluezBoolean(value: unknown, ): boolean {
+    return String(value).toLowerCase() === "true";
   }
 
   private async withTimeout<T>(
