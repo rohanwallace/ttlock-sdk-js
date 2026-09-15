@@ -92,7 +92,7 @@ export class NobleDevice extends EventEmitter implements DeviceInterface {
     return this.busy;
   }
 
-  async connect(timeout: number = 10): Promise<boolean> {
+async connect(timeout: number = 10): Promise<boolean> {
   console.log("==================================================");
   console.log(`[NOBLE] connect() called for ${this.address}`);
   console.log(`[NOBLE] id=${this.id}`);
@@ -113,11 +113,12 @@ export class NobleDevice extends EventEmitter implements DeviceInterface {
       `connecting=${this.connecting}, ` +
       `peripheral.state=${this.peripheral.state}`
     );
+
     console.log("==================================================");
     return false;
   }
 
-  if (this.peripheral.state == "connected") {
+  if (this.peripheral.state === "connected") {
     console.log(
       "[NOBLE] Peripheral already reports connected; synchronising wrapper state"
     );
@@ -180,7 +181,9 @@ export class NobleDevice extends EventEmitter implements DeviceInterface {
         );
 
         if (error !== undefined && error !== null) {
-          console.warn("[NOBLE] Late callback error:", error);
+          console.warn(
+            `[NOBLE] Late callback error: ${error}`
+          );
         }
 
         return;
@@ -190,24 +193,22 @@ export class NobleDevice extends EventEmitter implements DeviceInterface {
       clearTimeout(timer);
 
       if (error !== undefined && error !== null) {
-        console.error("[NOBLE] Peripheral connect error:", error);
-
-        if (error instanceof Error) {
-          console.error(`[NOBLE] Error name=${error.name}`);
-          console.error(`[NOBLE] Error message=${error.message}`);
-
-          if (error.stack) {
-            console.error(`[NOBLE] Stack:\n${error.stack}`);
-          }
-        }
+        /*
+         * @abandonware/noble types the callback error as a string,
+         * rather than an Error object.
+         */
+        console.error(
+          `[NOBLE] Peripheral connect error: ${error}`
+        );
 
         resolve(false);
-
       } else {
-        console.log("[NOBLE] Connect callback contained no error");
+        console.log(
+          "[NOBLE] Connect callback contained no error"
+        );
 
         const stateConnected =
-          this.peripheral.state == "connected";
+          this.peripheral.state === "connected";
 
         console.log(
           `[NOBLE] stateConnected=${stateConnected}`
@@ -227,7 +228,9 @@ export class NobleDevice extends EventEmitter implements DeviceInterface {
   );
 
   if (!connected) {
-    console.error(`[NOBLE] Connection FAILED for ${this.address}`);
+    console.error(
+      `[NOBLE] Connection FAILED for ${this.address}`
+    );
 
     this.connecting = false;
 
@@ -239,8 +242,13 @@ export class NobleDevice extends EventEmitter implements DeviceInterface {
   this.connected = true;
   this.connecting = false;
 
-  console.log(`[NOBLE] Connection SUCCESS for ${this.address}`);
-  console.log(`[NOBLE] negotiated/current MTU=${this.mtu}`);
+  console.log(
+    `[NOBLE] Connection SUCCESS for ${this.address}`
+  );
+
+  console.log(
+    `[NOBLE] negotiated/current MTU=${this.mtu}`
+  );
 
   console.log("[NOBLE] Emitting connected event");
 
