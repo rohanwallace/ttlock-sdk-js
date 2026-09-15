@@ -2,6 +2,7 @@
 
 import { EventEmitter } from "node:events";
 import NodeBle = require("node-ble");
+import dbus = require("dbus-next");
 
 import {
   ScannerInterface,
@@ -49,7 +50,9 @@ export class BluezScanner
    * stop somebody else's session when stopScan() is called.
    */
   private ownsDiscovery: boolean = false;
-
+  private readonly discoveryBus: any;
+  private bluezAdapterInterface?: any;
+  private resolvedAdapterName?: string;
   private readonly adapterName?: string;
 
   constructor(
@@ -67,6 +70,12 @@ export class BluezScanner
     this.destroyBluetooth = session.destroy;
 
     /*
+     * Separate D-Bus connection used specifically for our discovery
+     * session. BlueZ tracks discovery ownership per D-Bus client.
+     */
+    this.discoveryBus = dbus.systemBus(); 
+
+    /*
      * Constructors cannot be async. Initialise in the background and emit
      * "ready" once the BlueZ adapter is available.
      */
@@ -81,13 +90,34 @@ export class BluezScanner
         console.log(
           `[BLUEZ] Using configured adapter ${this.adapterName}`,
         );
-
-        this.adapter =
-          await this.bluetooth.getAdapter(this.adapterName);
-      } else {
-        this.adapter =
-          await this.bluetooth.defaultAdapter();
       }
+
+      let adapterName = this.adapterName;
+
+      if (!adapterName) {
+        const adapters = await this.bluetooth.adapters();
+
+        if (adapters.length === 0) {
+          throw new Error("No BlueZ Bluetooth adapters available", );
+        }
+
+        adapterName = adapters[0];
+      }
+
+      this.resolvedAdapterName = adapterName;
+
+      this.adapter = await this.bluetooth.getAdapter(adapterName);
+
+      /*
+       * Get org.bluez.Adapter1 directly.
+       *
+       * We deliberately don't use node-ble's startDiscovery() because it
+       * refuses to acquire a discovery session whenever the adapter-global
+       * Discovering property is already true.
+       */
+      const proxy = await this.discoveryBus.getProxyObject("org.bluez", `/org/bluez/${adapterName}`, );
+
+      this.bluezAdapterInterface = proxy.getInterface("org.bluez.Adapter1");
 
       const address = await this.adapter.getAddress();
       const name = await this.adapter.getName();
@@ -134,6 +164,112 @@ export class BluezScanner
   }
 
   async startScan(
+  passive: boolean = false,
+): Promise<boolean> {
+  if (
+    this.scannerState !== "unknown" &&
+    this.scannerState !== "stopped"
+  ) {
+    return false;
+  }
+
+  if (
+    !this.adapter ||
+    !this.bluezAdapterInterface
+  ) {
+    console.error(
+      "[BLUEZ] Cannot start scan: adapter not ready",
+    );
+
+    return false;
+  }
+
+  this.scannerState = "starting";
+
+  try {
+    const discoveringBefore =
+      await this.adapter.isDiscovering();
+
+    console.log(
+      `[BLUEZ] Starting our discovery session ` +
+      `(requested passive=${passive})`,
+    );
+
+    console.log(
+      `[BLUEZ] Adapter Discovering before our session=` +
+      `${discoveringBefore}`,
+    );
+
+    /*
+     * SetDiscoveryFilter is PER D-Bus CLIENT.
+     *
+     * BlueZ merges our filter with filters belonging to any other
+     * discovery clients.
+     */
+    await this.bluezAdapterInterface
+      .SetDiscoveryFilter({
+        Transport:
+          new dbus.Variant("s", "le"),
+
+        /*
+         * We want fresh advertisement updates from TTLock rather than
+         * relying entirely on BlueZ's cached Device object.
+         */
+        DuplicateData:
+          new dbus.Variant("b", true),
+      });
+
+    /*
+     * Always acquire OUR OWN discovery session.
+     *
+     * Do not use Adapter1.Discovering to decide whether to call this.
+     * Discovering is adapter-wide and may already be true because another
+     * D-Bus client owns a different discovery session.
+     */
+    await this.bluezAdapterInterface
+      .StartDiscovery();
+
+    this.ownsDiscovery = true;
+
+    const discoveringAfter =
+      await this.adapter.isDiscovering();
+
+    console.log(
+      `[BLUEZ] Our discovery session started`,
+    );
+
+    console.log(
+      `[BLUEZ] Adapter Discovering after our session=` +
+      `${discoveringAfter}`,
+    );
+
+    this.scannerState = "scanning";
+
+    this.startPolling();
+
+    this.emit("scanStart");
+
+    /*
+     * Don't wait for the first poll interval.
+     */
+    void this.pollDevices();
+
+    return true;
+
+  } catch (error) {
+    console.error(
+      "[BLUEZ] Unable to start our discovery session:",
+      error,
+    );
+
+    this.ownsDiscovery = false;
+    this.scannerState = "stopped";
+
+    return false;
+  }
+}
+
+  async startScan_OLD(
     passive: boolean = false,
   ): Promise<boolean> {
     if (
@@ -212,6 +348,60 @@ export class BluezScanner
   }
 
   async stopScan(): Promise<boolean> {
+  if (this.scannerState !== "scanning") {
+    return false;
+  }
+
+  this.scannerState = "stopping";
+
+  this.stopPolling();
+
+  try {
+    if (
+      this.ownsDiscovery &&
+      this.bluezAdapterInterface
+    ) {
+      console.log(
+        "[BLUEZ] Releasing our discovery session",
+      );
+
+      await this.bluezAdapterInterface
+        .StopDiscovery();
+    }
+
+  } catch (error) {
+    console.warn(
+      "[BLUEZ] Error releasing our discovery session:",
+      error,
+    );
+
+  } finally {
+    this.ownsDiscovery = false;
+
+    this.scannerState = "stopped";
+
+    this.emit("scanStop");
+  }
+
+  try {
+    if (this.adapter) {
+      const stillDiscovering =
+        await this.adapter.isDiscovering();
+
+      console.log(
+        `[BLUEZ] Our scan stopped; adapter-global ` +
+        `Discovering=${stillDiscovering}`,
+      );
+    }
+
+  } catch {
+    // Diagnostic only.
+  }
+
+  return true;
+}
+
+  async stopScan_OLD(): Promise<boolean> {
     if (this.scannerState !== "scanning") {
       return false;
     }
