@@ -42,7 +42,9 @@ export class BluezDevice
 
   private gattServer?: NodeBle.GattServer;
 
-  private readonly device: NodeBle.Device;
+  private device: NodeBle.Device;
+
+  private readonly adapter: NodeBle.Adapter;
 
   private readonly onConnectBound:
     (state: NodeBle.ConnectionState) => void;
@@ -50,9 +52,10 @@ export class BluezDevice
   private readonly onDisconnectBound:
     (state: NodeBle.ConnectionState) => void;
 
-  private constructor(device: NodeBle.Device) {
+  private constructor(adapter: NodeBle.Adapter, device: NodeBle.Device, ) {
     super();
 
+    this.adapter = adapter;
     this.device = device;
 
     this.onConnectBound =
@@ -72,10 +75,9 @@ export class BluezDevice
     );
   }
 
-  static async create(
-    device: NodeBle.Device,
-  ): Promise<BluezDevice> {
-    const result = new BluezDevice(device);
+  static async create(adapter: NodeBle.Adapter, device: NodeBle.Device, ): Promise<BluezDevice> {
+    const result =
+    new BluezDevice(adapter, device);
 
     await result.refresh();
 
@@ -188,6 +190,69 @@ export class BluezDevice
     }
   }
 
+  private async reacquireDevice(timeoutMs: number = 5000, ): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      try {
+        const fresh =
+          await this.adapter.getDevice(
+            this.address
+          );
+
+        /*
+         * Remove our event handlers from the old node-ble wrapper.
+         */
+        this.device.removeListener(
+          "connect",
+          this.onConnectBound,
+        );
+
+        this.device.removeListener(
+          "disconnect",
+          this.onDisconnectBound,
+        );
+
+        /*
+         * Switch to a fresh proxy for the current BlueZ Device1 object.
+         */
+        this.device = fresh;
+
+        this.device.on(
+          "connect",
+          this.onConnectBound,
+        );
+
+        this.device.on(
+          "disconnect",
+          this.onDisconnectBound,
+        );
+
+        console.log(
+          `[BLUEZ] Reacquired fresh Device1 proxy for ${this.address}`
+        );
+
+        return true;
+
+      } catch {
+        /*
+         * Device1 isn't currently present. With our discovery session still
+         * active it should reappear when the lock advertises again.
+         */
+        await new Promise<void>((resolve) =>
+          setTimeout(resolve, 100)
+        );
+      }
+    }
+
+    console.warn(
+      `[BLUEZ] Device1 for ${this.address} did not reappear ` +
+      `within ${timeoutMs} ms`
+    );
+
+    return false;
+  }
+
   /**
    * BlueZ represents ManufacturerData as:
    *
@@ -295,97 +360,95 @@ export class BluezDevice
     return this.busy;
   }
 
-  async connect(
-  timeout: number = CONNECT_TIMEOUT_MS / 1000,
-): Promise<boolean> {
-  console.log("==================================================");
-  console.log(
-    `[BLUEZ] connect() called for ${this.address}`,
-  );
-  console.log(`[BLUEZ] id=${this.id}`);
-  console.log(
-    `[BLUEZ] addressType=${this.addressType}`,
-  );
-  console.log(`[BLUEZ] RSSI=${this.rssi}`);
-  console.log(
-    `[BLUEZ] wrapper.connected=${this.connected}`,
-  );
-  console.log(
-    `[BLUEZ] wrapper.connecting=${this.connecting}`,
-  );
+  async connect(timeout: number = CONNECT_TIMEOUT_MS / 1000, ): Promise<boolean> {
+    console.log("==================================================");
+    console.log(`[BLUEZ] connect() called for ${this.address}`, );
+    console.log(`[BLUEZ] id=${this.id}`);
+    console.log(`[BLUEZ] addressType=${this.addressType}`, );
+    console.log(`[BLUEZ] RSSI=${this.rssi}`);
+    console.log(`[BLUEZ] wrapper.connected=${this.connected}`, );
+    console.log(`[BLUEZ] wrapper.connecting=${this.connecting}`, );
 
-  if (!this.connectable || this.connecting) {
-    console.error(
-      `[BLUEZ] Refusing connection: ` +
-      `connectable=${this.connectable}, ` +
-      `connecting=${this.connecting}`,
-    );
-
-    console.log(
-      "==================================================",
-    );
-
-    return false;
-  }
-
-  /*
-   * First ask BlueZ whether the device is already connected.
-   */
-  try {
-    const rawConnected = await this.device.isConnected();
-
-    const alreadyConnected = BluezDevice.bluezBoolean(rawConnected);
-
-    console.log(
-      `[BLUEZ] Connected before Connect()=${alreadyConnected}`,
-    );
-
-    if (alreadyConnected) {
-      console.log(
-        "[BLUEZ] Device already connected",
+    if (!this.connectable || this.connecting) {
+      console.error(
+        `[BLUEZ] Refusing connection: ` +
+        `connectable=${this.connectable}, ` +
+        `connecting=${this.connecting}`,
       );
-
-      this.markConnected();
 
       console.log(
         "==================================================",
       );
 
-      return true;
+      return false;
     }
-  } catch (error) {
-    console.warn(
-      "[BLUEZ] Unable to query initial Connected state:",
-      error,
-    );
-  }
 
-  this.connecting = true;
+    console.log(`[BLUEZ] Acquiring fresh Device1 proxy before connection` );
 
-  const start = Date.now();
+    if (!(await this.reacquireDevice())) {
+      console.error(`[BLUEZ] Cannot connect: device is not currently advertising` );
 
-  try {
-    console.log(
-      `[BLUEZ] Calling org.bluez.Device1.Connect for ${this.address}`,
-    );
+      this.connecting = false;
+
+      console.log("==================================================");
+
+      return false;
+    }
 
     /*
-     * IMPORTANT:
-     *
-     * Do NOT wrap this in Promise.race()/withTimeout().
-     *
-     * Promise.race does not cancel the underlying D-Bus Connect request.
-     * That leaves a live BlueZ connection attempt behind while the SDK
-     * starts another retry, creating overlapping Connect/Disconnect calls.
-     *
-     * BlueZ already owns the LE connection timeout.
+     * First ask BlueZ whether the device is already connected.
      */
-    await this.device.connect();
+    try {
+      const rawConnected = await this.device.isConnected();
 
-    console.log(
-      `[BLUEZ] Device1.Connect returned normally after ` +
-      `${Date.now() - start} ms`,
-    );
+      const alreadyConnected = BluezDevice.bluezBoolean(rawConnected);
+
+      console.log(`[BLUEZ] Connected before Connect()=${alreadyConnected}`, );
+
+      if (alreadyConnected) {
+        console.log("[BLUEZ] Device already connected", );
+
+        this.markConnected();
+
+        console.log(
+          "==================================================",
+        );
+
+        return true;
+      }
+    } catch (error) {
+      console.warn(
+        "[BLUEZ] Unable to query initial Connected state:",
+        error,
+      );
+    }
+
+    this.connecting = true;
+
+    const start = Date.now();
+
+    try {
+      console.log(
+        `[BLUEZ] Calling org.bluez.Device1.Connect for ${this.address}`,
+      );
+
+      /*
+       * IMPORTANT:
+       *
+       * Do NOT wrap this in Promise.race()/withTimeout().
+       *
+       * Promise.race does not cancel the underlying D-Bus Connect request.
+       * That leaves a live BlueZ connection attempt behind while the SDK
+       * starts another retry, creating overlapping Connect/Disconnect calls.
+       *
+       * BlueZ already owns the LE connection timeout.
+       */
+      await this.device.connect();
+
+      console.log(
+        `[BLUEZ] Device1.Connect returned normally after ` +
+        `${Date.now() - start} ms`,
+      );
 
     const rawConnected = await this.device.isConnected();
 

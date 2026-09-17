@@ -365,8 +365,7 @@ async stopScan(): Promise<boolean> {
           let device = this.devices.get(id);
 
           if (!device) {
-            device =
-              await BluezDevice.create(nodeDevice);
+            device = await BluezDevice.create(this.adapter, nodeDevice, );
 
             this.devices.set(id, device);
           } else {
