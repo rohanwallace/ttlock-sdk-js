@@ -465,9 +465,10 @@ export class BluezDevice
       const actuallyConnected = BluezDevice.bluezBoolean(rawConnected);
 
       console.log(
-        `[BLUEZ] Device1.Connected after Connect error=` +
-        `${actuallyConnected}`,
-      );
+      `[BLUEZ] Device1.Connected raw=` +
+      `${JSON.stringify(rawConnected)} ` +
+      `normalised=${actuallyConnected}`,
+    );
 
     } catch (stateError) {
       console.warn(
