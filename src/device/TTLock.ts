@@ -36,6 +36,10 @@ export interface TTLock {
   on(event: 'scanFRStart', listener: (lock: TTLock) => void): this;
   /** Emited after each fingerprint scan */
   on(event: 'scanFRProgress', listener: (lock: TTLock) => void): this;
+  isInSettingMode(): boolean;
+  isTouched(): boolean;
+  getProtocolType(): number;
+  getProtocolVersion(): number;
 }
 
 export class TTLock extends TTLockApi implements TTLock {
@@ -91,6 +95,22 @@ export class TTLock extends TTLockApi implements TTLock {
 
   getRssi(): number {
     return this.rssi;
+  }
+
+  isInSettingMode(): boolean {
+    return this.device.isSettingMode;
+  }
+
+  isTouched(): boolean {
+    return this.device.isTouch;
+  }
+
+  getProtocolType(): number {
+    return this.device.protocolType;
+  }
+
+  getProtocolVersion(): number {
+    return this.device.protocolVersion;
   }
 
   /**
